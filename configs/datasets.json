@@ -1,0 +1,39 @@
+{
+  "2wikimultihopqa": {
+    "dataset_name": "framolfese/2WikiMultihopQA",
+    "dataset_config": null,
+    "split": "train",
+    "streaming": false,
+    "cache_dir": "data/raw/2wikimultihopqa",
+    "text_field": "question"
+  },
+  "hotpotqa": {
+    "dataset_name": "hotpotqa/hotpot_qa",
+    "dataset_config": "distractor",
+    "split": "train",
+    "streaming": false,
+    "cache_dir": "data/raw/hotpotqa",
+    "text_field": "question"
+  },
+  "openwebtext": {
+    "dataset_name": "Skylion007/openwebtext",
+    "dataset_config": null,
+    "split": "train",
+    "streaming": true,
+    "text_field": "text"
+  },
+  "wikipedia": {
+    "dataset_name": "wikimedia/wikipedia",
+    "dataset_config": "20231101.en",
+    "split": "train",
+    "streaming": true,
+    "text_field": "text"
+  },
+  "wikitext": {
+    "dataset_name": "Salesforce/wikitext",
+    "dataset_config": "wikitext-103-raw-v1",
+    "split": "train",
+    "streaming": true,
+    "text_field": "text"
+  }
+}

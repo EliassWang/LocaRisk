@@ -1,0 +1,15 @@
+.idea/
+
+__pycache__/
+*.py[cod]
+
+models/
+outputs/
+result/
+log/
+ablation/
+
+data/*
+!data/payloads/
+data/payloads/*
+!data/payloads/payloads.json

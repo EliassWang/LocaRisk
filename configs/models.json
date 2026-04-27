@@ -1,0 +1,23 @@
+{
+  "_generation": {
+    "max_new_tokens": 20,
+    "temperature": 0.1,
+    "do_sample": true,
+    "enable_thinking": false
+  },
+  "Qwen3-4B": {
+    "path": "models/Qwen_Qwen3-4B"
+  },
+  "Gemma-2-2B": {
+    "path": "models/google_gemma-2-2b-it"
+  },
+  "Llama3-8B": {
+    "path": "models/meta-llama_Meta-Llama-3-8B-Instruct"
+  },
+  "Mistral-7B": {
+    "path": "models/mistralai_Mistral-7B-Instruct-v0.3"
+  },
+  "Falcon3-7B": {
+    "path": "models/tiiuae_Falcon3-7B-Instruct"
+  }
+}
