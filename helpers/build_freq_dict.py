@@ -62,8 +62,7 @@ def run_analysis(dataset_key: str, max_docs: int):
             total_tokens += len(ids)
 
         if total_tokens > 0:
-            safe_name = model_path.name
-            out_path = OUTPUT_DIR / dataset_key / f"{safe_name}_{max_docs}.json"
+            out_path = OUTPUT_DIR / dataset_key / f"{model_id}_{max_docs}.json"
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
             results = {
