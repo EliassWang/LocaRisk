@@ -1,0 +1,7 @@
+{
+    "smoothllm": {
+    "pert_type": "swap",
+    "pert_pct": 10,
+    "num_copies": 10
+  }
+}

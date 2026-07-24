@@ -110,7 +110,7 @@ class LLM:
     @torch.no_grad()
     def __call__(self, prompt: str, task: str = None, **kwargs) -> str:
         text = self.tok.apply_chat_template(
-            [{"role": "user", "content": f"{task}:\n{prompt}" if task else prompt}],
+            [{"role": "user", "content": f"{task}\n{prompt}" if task else prompt}],
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=False

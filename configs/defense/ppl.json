@@ -1,0 +1,15 @@
+{
+    "ppl": {
+    "target_fpr": 0.05,
+    "if_hit_threshold": "reject"
+     },
+    "windowed_ppl":{
+        "target_fpr": 0.05,
+        "window_length": 3,
+        "window_stride": 1
+    },
+    "segmented_ppl": {
+        "target_fpr": 0.05,
+        "if_hit_threshold": "drop"
+    }
+}

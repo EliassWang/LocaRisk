@@ -1,17 +1,33 @@
 """SmoothLLM defense for batched prompt perturbation."""
 
 import random
+import sys
 
 import numpy as np
 import torch
 
-from src.defenses.probe_core.intervene import (
-    get_segment_risky_counts,
-    select_top_risky_segment_ids,
-)
-from src.defenses.probe_core.rl import rl
+from src.defenses.SLcore import Intervention
+from src.defenses.SLcore import RL
+from src.defenses.SLcore import DEFAULT_EMBED_MODEL
 from src.evaluation.cost import empty_cost_summary
 from src.inference.model import LLM
+
+
+def _print_copy_progress(prefix: str | None, done: int, total: int) -> None:
+    """Report smoothing-loop progress so long waits don't look hung.
+
+    Overwrites one line (\r) on a live terminal; emits a plain line per
+    update when stdout is redirected to a file/log, since \r doesn't
+    create new lines there and would otherwise look like a stuck frozen line.
+    """
+    if prefix is None:
+        return
+    if sys.stdout.isatty():
+        end = "\n" if done == total else ""
+        sys.stdout.write(f"\r{prefix}\t[smooth] perturbed copy {done}/{total} generated{end}")
+    else:
+        sys.stdout.write(f"{prefix}\t[smooth] perturbed copy {done}/{total} generated\n")
+    sys.stdout.flush()
 
 
 class SmoothLLM:
@@ -90,6 +106,7 @@ class SmoothLLM:
         batch_size: int = 1,
         max_new_len: int = 100,
         do_sample: bool = False,
+        progress_prefix: str | None = None,
     ) -> str:
         runtime = self._get_runtime()
         if runtime is not None:
@@ -113,6 +130,7 @@ class SmoothLLM:
                     )
                 )
                 torch.cuda.empty_cache()
+                _print_copy_progress(progress_prefix, len(outputs), self.num_copies)
 
             labels = [self.is_jailbroken(output) for output in outputs]
             if not labels:
@@ -146,6 +164,7 @@ class SmoothLocatedLLM(SmoothLLM):
         freq_dataset: str = "openwebtext",
         segment_top_pct: float = 20.0,
         seed: int = 42,
+        embed_model: str | None = None,
         pert_type: str = "swap",
         pert_pct: int = 10,
         num_copies: int = 10,
@@ -160,57 +179,41 @@ class SmoothLocatedLLM(SmoothLLM):
         self.tau = tau
         self.segment_top_pct = segment_top_pct
         self.seed = seed
+        self.locator = "multi_signal"
         self.freq_data_path = f"data/corpus_freqs/{freq_dataset}/{model_name}_{docs_number}.json"
 
-    def _tokenize_segments(self, segments: list[str]) -> tuple[list[list[tuple[str, int]]], set[int]]:
-        tokenized_segments = []
-        target_token_ids = set()
-
-        for text in segments:
-            encoding = self.tokenizer(
-                text,
-                add_special_tokens=False,
-                return_offsets_mapping=True,
-            )
-            input_ids = encoding["input_ids"]
-            segment_tokens = []
-
-            for token_id, (start, end) in zip(input_ids, encoding["offset_mapping"]):
-                token_text = text[start:end]
-                segment_tokens.append((token_text, token_id))
-                target_token_ids.add(token_id)
-
-            tokenized_segments.append(segment_tokens)
-
-        return tokenized_segments, target_token_ids
+        locator_config = {
+            "freq_data_path": self.freq_data_path, "tau": tau, "tokenizer": tokenizer,
+            "embed_model": embed_model or DEFAULT_EMBED_MODEL,
+        }
+        self._rl = RL(locator_config=locator_config)
+        self._intervention = Intervention("drop", k=segment_top_pct)
 
     def locate_risky_segments(
         self,
         segments: list[str],
         case_id=None,
-    ) -> tuple[set[int], list[int]]:
-        tokenized_segments, target_token_ids = self._tokenize_segments(segments)
-        risky_ids = rl(
-            freq_data_path=self.freq_data_path,
-            tau=self.tau,
-            target_token_ids=target_token_ids,
+        question: str = "",
+    ) -> tuple[set[int], list[float]]:
+        if not question:
+            raise ValueError("multi_signal locator requires a question string")
+        scores = self._rl.score_all(question, segments)
+        _, selected_segment_ids = self._intervention(
+            segments, scores,
+            random.Random(f"{self.seed}:{case_id}"),
         )
-        segment_risky_counts = get_segment_risky_counts(tokenized_segments, risky_ids)
-        selected_segment_ids = select_top_risky_segment_ids(
-            segment_risky_counts,
-            target_percentage=self.segment_top_pct,
-            rng=random.Random(f"{self.seed}:{case_id}:segment-select"),
-        )
-        return selected_segment_ids, segment_risky_counts
+        return selected_segment_ids, scores
 
     def build_perturbed_contexts(
         self,
         segments: list[str],
         case_id=None,
+        question: str = "",
     ) -> tuple[list[str], dict]:
         selected_segment_ids, segment_risky_counts = self.locate_risky_segments(
             segments,
             case_id=case_id,
+            question=question,
         )
 
         if not selected_segment_ids:
@@ -243,10 +246,12 @@ class SmoothLocatedLLM(SmoothLLM):
         segments: list[str],
         *,
         case_id=None,
+        question: str = "",
         task: str | None = None,
         batch_size: int = 1,
         max_new_len: int = 100,
         do_sample: bool = False,
+        progress_prefix: str | None = None,
     ) -> tuple[str, dict]:
         runtime = self._get_runtime()
         if runtime is not None:
@@ -256,6 +261,7 @@ class SmoothLocatedLLM(SmoothLLM):
         perturbed_prompts, localization_details = self.build_perturbed_contexts(
             segments,
             case_id=case_id,
+            question=question,
         )
         merged_perturbed_prompts = [
             self._merge_task_and_prompt(prompt, task)
@@ -278,6 +284,7 @@ class SmoothLocatedLLM(SmoothLLM):
                     )
                 )
                 torch.cuda.empty_cache()
+                _print_copy_progress(progress_prefix, len(outputs), len(merged_perturbed_prompts))
 
             labels = [self.is_jailbroken(output) for output in outputs]
             if not labels:

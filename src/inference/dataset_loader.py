@@ -3,7 +3,11 @@ import os
 from datasets import load_dataset
 
 
-def load_dataset_data(name: str, config_path: str = "configs/datasets.json"):
+def load_dataset_data(
+    name: str,
+    config_path: str = "configs/datasets.json",
+    split: str | None = None,
+):
     with open(config_path, 'r', encoding='utf-8') as f:
         configs = json.load(f)
 
@@ -12,7 +16,7 @@ def load_dataset_data(name: str, config_path: str = "configs/datasets.json"):
     ds = load_dataset(
         path=item.get("dataset_name"),
         name=item.get("dataset_config"),
-        split=item.get("split"),
+        split=split or item.get("split"),
         streaming=item.get("streaming", False),
         cache_dir=item.get("cache_dir")
     )

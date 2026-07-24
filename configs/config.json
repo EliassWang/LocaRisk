@@ -1,0 +1,13 @@
+{
+    "default_attack": "obli-injection",
+    "corrupt_rag": {
+        "hotpotqa": {
+            "payload_path": "data/payloads/corrupt_rag/hotpotqa_corrputRAG-AS.json",
+            "split": "validation"
+        },
+        "2wikimultihopqa": {
+            "payload_path": "data/payloads/corrupt_rag/2wikimultihopqa.json",
+            "split": "train"
+        }
+    }
+}

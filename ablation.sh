@@ -3,16 +3,27 @@
 set -u -o pipefail
 
 MODE=""
+ATTACK_FILTER=""
+DEFENSE_FILTER=""
+EMBED_MODEL=""
+INTERVENTION_FILTER=""
+ADAPTIVE=0
 TEST_NUMBER="200"
 SEED="42"
-TAU="0.1"
-FREQ_DATASET="openwebtext"
-DOCS_NUMBER="5000"
-SEGMENT_TOP_PCT="20"
+
+DEFENSES=(
+  "sl"
+  "SL-smooth"
+)
 
 DATASETS=(
   "hotpotqa"
   "2wikimultihopqa"
+)
+
+ATTACKS=(
+  "obli-injection"
+  "corrupt-rag"
 )
 
 MODELS=(
@@ -31,12 +42,23 @@ Usage:
   bash ablation.sh --mode <mode>
 
 Modes:
-  intervent  Compare intervention methods: swap, drop
-  locator    Compare locator methods: freq, random, oracle
+  intervent  For sl: compare intervention methods swap, drop. Also runs
+             SL-smooth once per configuration (its intervention is
+             always drop internally, --intervention does not apply to it).
+             locator is always multi_signal for both.
 
 Options:
-  --mode <mode>  One of: intervent, intervention, locator
-  -h, --help     Show this help message
+  --mode <mode>         One of: intervent, intervention
+  --attack <name>       Restrict to a single attack: obli-injection or corrupt-rag; default runs both
+  --defense <name>      Restrict to a single defense: sl or SL-smooth; default runs both
+  --embed_model <name>  Embedding model for the multi_signal locator (HuggingFace id or local path)
+  --intervention <name> Restrict sl to a single intervention (e.g. swap, drop); default runs both
+  --adaptive             Use the defense-aware ObliInjection payload set (applies only to the
+                         obli-injection leg of the sweep; corrupt-rag runs are unaffected)
+  -h, --help            Show this help message
+
+tau, docs_number, freq_dataset, and segment_top_pct are configured in
+configs/defense/defenses.json, not on this CLI.
 EOF
 }
 
@@ -59,6 +81,30 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
+    --attack)
+      require_arg "$@"
+      ATTACK_FILTER="$2"
+      shift 2
+      ;;
+    --defense)
+      require_arg "$@"
+      DEFENSE_FILTER="$2"
+      shift 2
+      ;;
+    --embed_model)
+      require_arg "$@"
+      EMBED_MODEL="$2"
+      shift 2
+      ;;
+    --intervention)
+      require_arg "$@"
+      INTERVENTION_FILTER="$2"
+      shift 2
+      ;;
+    --adaptive)
+      ADAPTIVE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -77,35 +123,48 @@ case "$MODE" in
   intervention)
     MODE="intervent"
     ;;
-  intervent|locator)
+  intervent)
     ;;
   *)
     die "Unknown mode: $MODE"
     ;;
 esac
 
-case "$MODE" in
-  intervent)
-    LOCATORS=(freq)
-    INTERVENTIONS=(swap drop)
-    ;;
-  locator)
-    LOCATORS=(freq random oracle)
-    INTERVENTIONS=(swap)
-    ;;
-esac
+INTERVENTIONS=(swap drop)
+
+if [[ -n "$INTERVENTION_FILTER" ]]; then
+  if [[ ! " ${INTERVENTIONS[*]} " == *" ${INTERVENTION_FILTER} "* ]]; then
+    die "--intervention '${INTERVENTION_FILTER}' is not valid for mode '${MODE}' (valid: ${INTERVENTIONS[*]})"
+  fi
+  INTERVENTIONS=("$INTERVENTION_FILTER")
+fi
+
+if [[ -n "$ATTACK_FILTER" ]]; then
+  if [[ ! " ${ATTACKS[*]} " == *" ${ATTACK_FILTER} "* ]]; then
+    die "--attack '${ATTACK_FILTER}' is not valid (valid: ${ATTACKS[*]})"
+  fi
+  ATTACKS=("$ATTACK_FILTER")
+fi
+
+if [[ -n "$DEFENSE_FILTER" ]]; then
+  if [[ ! " ${DEFENSES[*]} " == *" ${DEFENSE_FILTER} "* ]]; then
+    die "--defense '${DEFENSE_FILTER}' is not valid (valid: ${DEFENSES[*]})"
+  fi
+  DEFENSES=("$DEFENSE_FILTER")
+fi
 
 print_run_banner() {
   local dataset="$1"
   local model="$2"
-  local locator="$3"
+  local defense="$3"
   local intervention="$4"
+  local attack="$5"
 
   echo
   echo "============================================================"
-  echo "Running mode=${MODE} dataset=${dataset} model=${model}"
-  echo "seed=${SEED} test_number=${TEST_NUMBER} tau=${TAU} docs_number=${DOCS_NUMBER} freq_dataset=${FREQ_DATASET} segment_top_pct=${SEGMENT_TOP_PCT}"
-  echo "locator=${locator}"
+  echo "Running mode=${MODE} dataset=${dataset} model=${model} attack=${attack} defense=${defense}"
+  echo "seed=${SEED} test_number=${TEST_NUMBER}"
+  echo "locator=multi_signal"
   echo "intervention=${intervention}"
   echo "============================================================"
 }
@@ -113,47 +172,62 @@ print_run_banner() {
 run_one_configuration() {
   local dataset="$1"
   local model="$2"
-  local locator="$3"
+  local defense="$3"
   local intervention="$4"
+  local attack="$5"
   local run_args=(
+    --defense "$defense"
     --model "$model"
     --dataset "$dataset"
+    --attack "$attack"
     --seed "$SEED"
     --test_number "$TEST_NUMBER"
-    --tau "$TAU"
-    --docs_number "$DOCS_NUMBER"
-    --freq_dataset "$FREQ_DATASET"
-    --segment_top_pct "$SEGMENT_TOP_PCT"
-    --locator "$locator"
-    --intervention "$intervention"
-    --ablation_type "$MODE"
   )
 
-  print_run_banner "$dataset" "$model" "$locator" "$intervention"
+  if [[ "$defense" == "sl" ]]; then
+    run_args+=(--intervention "$intervention")
+  fi
 
-  if python ablation_eval.py "${run_args[@]}"; then
-    echo "Completed: ${dataset} / ${model} / locator=${locator} / intervention=${intervention}"
+  if [[ -n "$EMBED_MODEL" ]]; then
+    run_args+=(--embed_model "$EMBED_MODEL")
+  fi
+
+  if [[ "$ADAPTIVE" -eq 1 && "$attack" == "obli-injection" ]]; then
+    run_args+=(--adaptive)
+  fi
+
+  print_run_banner "$dataset" "$model" "$defense" "$intervention" "$attack"
+
+  if python eval.py "${run_args[@]}"; then
+    echo "Completed: ${dataset} / ${model} / attack=${attack} / defense=${defense} / intervention=${intervention}"
   else
-    echo "Failed: ${dataset} / ${model} / locator=${locator} / intervention=${intervention}"
-    FAILED_RUNS+=("${dataset}:${model}:locator_${locator}:intervention_${intervention}")
+    echo "Failed: ${dataset} / ${model} / attack=${attack} / defense=${defense} / intervention=${intervention}"
+    FAILED_RUNS+=("${dataset}:${model}:attack_${attack}:defense_${defense}:intervention_${intervention}")
   fi
 }
 
 echo
 echo "Ablation schedule"
-echo "mode=${MODE}"
+echo "mode=${MODE} attacks=${ATTACKS[*]} defenses=${DEFENSES[*]} embed_model=${EMBED_MODEL:-default} adaptive=${ADAPTIVE}"
 echo "datasets=${DATASETS[*]}"
 echo "models=${MODELS[*]}"
-echo "locators=${LOCATORS[*]}"
-echo "interventions=${INTERVENTIONS[*]}"
-echo "seed=${SEED} test_number=${TEST_NUMBER} tau=${TAU} docs_number=${DOCS_NUMBER} freq_dataset=${FREQ_DATASET} segment_top_pct=${SEGMENT_TOP_PCT}"
+echo "locator=multi_signal"
+echo "interventions (sl only)=${INTERVENTIONS[*]}"
+echo "seed=${SEED} test_number=${TEST_NUMBER}"
 
 for dataset in "${DATASETS[@]}"; do
-  for model in "${MODELS[@]}"; do
-    for locator in "${LOCATORS[@]}"; do
-      for intervention in "${INTERVENTIONS[@]}"; do
-        run_one_configuration "$dataset" "$model" "$locator" "$intervention"
-        sleep 3
+  for attack in "${ATTACKS[@]}"; do
+    for model in "${MODELS[@]}"; do
+      for defense in "${DEFENSES[@]}"; do
+        if [[ "$defense" == "sl" ]]; then
+          for intervention in "${INTERVENTIONS[@]}"; do
+            run_one_configuration "$dataset" "$model" "$defense" "$intervention" "$attack"
+            sleep 3
+          done
+        else
+          run_one_configuration "$dataset" "$model" "$defense" "-" "$attack"
+          sleep 3
+        fi
       done
     done
   done

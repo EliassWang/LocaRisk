@@ -1,3 +1,5 @@
+CLAUDE.md
+
 .idea/
 
 __pycache__/
@@ -8,6 +10,7 @@ outputs/
 result/
 log/
 ablation/
+diagnostics/
 
 data/*
 !data/payloads/

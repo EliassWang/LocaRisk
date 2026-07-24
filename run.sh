@@ -5,17 +5,12 @@ set -euo pipefail
 MODEL_NAME=""
 DATASET=""
 DEFENSE=""
+ATTACK=""
+EMBED_MODEL=""
 TEST_NUMBER=""
 SEED=""
-TAU=""
-DOCS_NUMBER=""
-FREQ_DATASET=""
-PPL_FPR=""
-WINDOW_LENGTH=""
-SMOOTH_PERT_TYPE=""
-SMOOTH_PERT_PCT=""
-SMOOTH_NUM_COPIES=""
-SEGMENT_TOP_PCT=""
+DEBUG=0
+ADAPTIVE=0
 NO_ATTACK=0
 POSITIONAL_ARGS=()
 
@@ -34,20 +29,21 @@ Usage:
 Options:
   --model_name <name>  Model name from configs/models.json
   --dataset <name>     One of: hotpotqa, 2wikimultihopqa
-  --defense <name>     One of: probe, ppl, segment_ppl, windowed_ppl, smoothllm, smooth_located, no_defense
+  --defense <name>     One of: sl, ppl, segment_ppl, windowed_ppl, smoothllm, SL-smooth, none
+  --attack <name>      One of: obli-injection (default), corrupt-rag, none (disables attack injection)
+  --embed_model <name> Embedding model for the multi_signal locator (sl / SL-smooth defenses)
+  --adaptive            Use the defense-aware ObliInjection payload set (obli-injection only)
+  --no_attack           Skip payload injection but keep --attack's sample-selection logic
+                        (e.g. CorruptRAG's payload-ID filter), for a sample-matched clean
+                        baseline. Redundant with --attack none.
   --test_number <int>  Number of samples to test (eval.py default: 200)
   --seed <int>         Optional random seed (eval.py auto-generates one if omitted)
-  --tau <float>        Probe tau used by smooth_located/localized defenses
-  --docs_number <int>  Probe docs_number used by smooth_located/localized defenses
-  --freq_dataset <name> Probe freq_dataset used by smooth_located/localized defenses
-  --segment_top_pct <float> Probe top-percentage segment selection used by smooth_located
-  --ppl_fpr <float>    Target clean case-FPR for ppl, segment_ppl, and windowed_ppl
-  --window_length <int> Window length for windowed_ppl
-  --smooth_pert_type <name> SmoothLLM perturbation type (default from configs/defenses.json)
-  --smooth_pert_pct <int> SmoothLLM perturbation percentage
-  --smooth_num_copies <int> Number of SmoothLLM perturbed copies
-  --no-attack          Disable attack injection into retrieved segments
+  --debug              Print intermediate RL scores and intervention decisions
   -h, --help           Show this help message
+
+tau, docs_number, freq_dataset, segment_top_pct, ppl_fpr, window_length,
+and the SmoothLLM perturbation settings are configured in
+configs/defense/{defenses,ppl,smoothllm}.json, not on this CLI.
 EOF
 }
 
@@ -65,6 +61,14 @@ while [[ $# -gt 0 ]]; do
       DEFENSE="$2"
       shift 2
       ;;
+    --attack)
+      ATTACK="$2"
+      shift 2
+      ;;
+    --embed_model)
+      EMBED_MODEL="$2"
+      shift 2
+      ;;
     --test_number)
       TEST_NUMBER="$2"
       shift 2
@@ -73,43 +77,15 @@ while [[ $# -gt 0 ]]; do
       SEED="$2"
       shift 2
       ;;
-    --tau)
-      TAU="$2"
-      shift 2
+    --debug)
+      DEBUG=1
+      shift
       ;;
-    --docs_number)
-      DOCS_NUMBER="$2"
-      shift 2
+    --adaptive)
+      ADAPTIVE=1
+      shift
       ;;
-    --freq_dataset)
-      FREQ_DATASET="$2"
-      shift 2
-      ;;
-    --segment_top_pct)
-      SEGMENT_TOP_PCT="$2"
-      shift 2
-      ;;
-    --ppl_fpr)
-      PPL_FPR="$2"
-      shift 2
-      ;;
-    --window_length)
-      WINDOW_LENGTH="$2"
-      shift 2
-      ;;
-    --smooth_pert_type)
-      SMOOTH_PERT_TYPE="$2"
-      shift 2
-      ;;
-    --smooth_pert_pct)
-      SMOOTH_PERT_PCT="$2"
-      shift 2
-      ;;
-    --smooth_num_copies)
-      SMOOTH_NUM_COPIES="$2"
-      shift 2
-      ;;
-    --no-attack)
+    --no_attack)
       NO_ATTACK=1
       shift
       ;;
@@ -156,6 +132,14 @@ COMMON_ARGS=(
   --dataset "$DATASET"
 )
 
+if [[ -n "$ATTACK" ]]; then
+  COMMON_ARGS+=(--attack "$ATTACK")
+fi
+
+if [[ -n "$EMBED_MODEL" ]]; then
+  COMMON_ARGS+=(--embed_model "$EMBED_MODEL")
+fi
+
 if [[ -n "$TEST_NUMBER" ]]; then
   COMMON_ARGS+=(
     --test_number "$TEST_NUMBER"
@@ -168,64 +152,16 @@ if [[ -n "$SEED" ]]; then
   )
 fi
 
-if [[ -n "$TAU" ]]; then
-  COMMON_ARGS+=(
-    --tau "$TAU"
-  )
+if [[ "$DEBUG" -eq 1 ]]; then
+  COMMON_ARGS+=(--debug)
 fi
 
-if [[ -n "$DOCS_NUMBER" ]]; then
-  COMMON_ARGS+=(
-    --docs_number "$DOCS_NUMBER"
-  )
-fi
-
-if [[ -n "$FREQ_DATASET" ]]; then
-  COMMON_ARGS+=(
-    --freq_dataset "$FREQ_DATASET"
-  )
-fi
-
-if [[ -n "$SEGMENT_TOP_PCT" ]]; then
-  COMMON_ARGS+=(
-    --segment_top_pct "$SEGMENT_TOP_PCT"
-  )
-fi
-
-if [[ -n "$PPL_FPR" ]]; then
-  COMMON_ARGS+=(
-    --ppl_fpr "$PPL_FPR"
-  )
-fi
-
-if [[ -n "$WINDOW_LENGTH" ]]; then
-  COMMON_ARGS+=(
-    --window_length "$WINDOW_LENGTH"
-  )
-fi
-
-if [[ -n "$SMOOTH_PERT_TYPE" ]]; then
-  COMMON_ARGS+=(
-    --smooth_pert_type "$SMOOTH_PERT_TYPE"
-  )
-fi
-
-if [[ -n "$SMOOTH_PERT_PCT" ]]; then
-  COMMON_ARGS+=(
-    --smooth_pert_pct "$SMOOTH_PERT_PCT"
-  )
-fi
-
-if [[ -n "$SMOOTH_NUM_COPIES" ]]; then
-  COMMON_ARGS+=(
-    --smooth_num_copies "$SMOOTH_NUM_COPIES"
-  )
+if [[ "$ADAPTIVE" -eq 1 ]]; then
+  COMMON_ARGS+=(--adaptive)
 fi
 
 if [[ "$NO_ATTACK" -eq 1 ]]; then
-  COMMON_ARGS+=(
-    --no-attack
-  )
+  COMMON_ARGS+=(--no_attack)
 fi
 
 COMMON_ARGS+=(
